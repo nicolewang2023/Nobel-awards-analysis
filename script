@@ -1,0 +1,126 @@
+"""
+Author: Nicole Wang
+Date: November 2024
+
+Title: Nobel Laureates Data Analysis - Birth Country and Awards
+"""
+
+import requests
+import os
+import pickle
+import pandas as pd
+import matplotlib.pyplot as plt
+
+# Set the working directory to your local repository path
+os.chdir(r"C:\Users\Nicole\Desktop\MyProjects")
+
+#-------------------------------------------------------------------------------
+# Set Inputs
+#-------------------------------------------------------------------------------
+
+# Set the parameters in a dictionary
+base_url = "https://api.nobelprize.org/2.1/laureates"
+parameters = {
+    "nobelPrizeYear": 2012,
+    "yearTo": 2022,
+    "limit": 1000
+}
+
+#-------------------------------------------------------------------------------
+# Execute API Call and Download results 
+#-------------------------------------------------------------------------------
+
+res = requests.get(base_url, params=parameters)
+
+# Save the response as a pickle file
+os.makedirs("intermediate", exist_ok=True)  # Create intermediate directory if not exists
+pkl_filename = os.path.join("intermediate", f"laureates_{parameters['nobelPrizeYear']}_{parameters['yearTo']}.pkl")
+with open(pkl_filename, "wb") as file:
+    pickle.dump(res, file)
+print(f"Data saved to {pkl_filename}")
+
+#-------------------------------------------------------------------------------
+# Flatten the Response into a DataFrame
+#-------------------------------------------------------------------------------
+response = res.json()
+laureates_data = response.get("laureates", [])
+
+data = pd.json_normalize(
+    laureates_data,
+    record_path=["nobelPrizes"],
+    meta=[
+        "id",
+        "gender",
+        ["knownName", "en"],
+        ["orgName", "en"],
+        ["birth", "date"],
+        ["founded", "date"],
+        ["birth", "place", "country", "en"],
+        ["founded", "place", "country", "en"],
+        ["wikipedia", "english"]
+    ],
+    errors='ignore',
+    sep="."
+)
+
+# Combine individuals' and organizations' columns
+data["knownName"] = data["knownName.en"].combine_first(data["orgName.en"])
+data["birthDate"] = data["birth.date"].combine_first(data["founded.date"])
+data["birthCountry"] = data["birth.place.country.en"].combine_first(
+    data["founded.place.country.en"]
+)
+
+# Rename columns
+data.rename(columns={
+    "wikipedia.english": "wikipediaUrl",
+    "categoryFullName.en": "categoryFullName",
+    "motivation.en": "motivation"
+}, inplace=True)
+
+# Select relevant columns
+columns_to_keep = [
+    "id",
+    "knownName",
+    "gender",
+    "birthDate",
+    "birthCountry",
+    "wikipediaUrl",
+    "awardYear",
+    "dateAwarded",
+    "categoryFullName",
+    "motivation"
+]
+
+columns_present = [col for col in columns_to_keep if col in data.columns]
+data = data[columns_present]
+
+#-------------------------------------------------------------------------------
+# Save the DataFrame to a CSV File
+#-------------------------------------------------------------------------------
+os.makedirs("output", exist_ok=True)
+csv_filename = os.path.join("output", f"nobel_laureates_by_birth_country.csv")
+data.to_csv(csv_filename, index=False)
+print(f"Data saved to {csv_filename}")
+
+#-------------------------------------------------------------------------------
+# Exploratory Analysis
+#-------------------------------------------------------------------------------
+
+# Prepare data for stacked bar chart
+data["awardYear"] = pd.to_numeric(data["awardYear"], errors="coerce")
+stacked_data = data.pivot_table(index="awardYear", columns="birthCountry", aggfunc="size", fill_value=0)
+
+# Plot stacked bar chart
+fig, ax = plt.subplots(figsize=(12, 8))
+stacked_data.plot(kind="bar", stacked=True, ax=ax, colormap="tab20")
+plt.title("Number of Nobel Laureates by Year and Birth Country")
+plt.xlabel("Year")
+plt.ylabel("Number of Laureates")
+plt.legend(title="Birth Country", bbox_to_anchor=(1.05, 1), loc="upper left")
+plt.tight_layout()
+
+# Save the chart
+output_chart_path = os.path.join("output", "nobel_laureates_by_birth_country.png")
+plt.savefig(output_chart_path)
+print(f"Chart saved to {output_chart_path}")
+plt.show()
