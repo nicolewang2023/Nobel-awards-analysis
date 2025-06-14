@@ -1,126 +1,106 @@
 """
 Author: Nicole Wang
-Date: November 2024
+Date: Updated June 2025
 
-Title: Nobel Laureates Data Analysis - Birth Country and Awards
+Title: Nobel Laureates Data Analysis – Birth Country and Awards
+This script fetches laureate data from the Nobel Prize API, normalizes it,
+saves structured data to CSV, and visualizes trends in award year vs. birth country.
 """
 
-import requests
 import os
 import pickle
+import requests
 import pandas as pd
 import matplotlib.pyplot as plt
 
-# Set the working directory to your local repository path
-os.chdir(r"C:\Users\Nicole\Desktop\MyProjects")
 
-#-------------------------------------------------------------------------------
-# Set Inputs
-#-------------------------------------------------------------------------------
+def fetch_nobel_data(start_year=2012, end_year=2022, limit=1000):
+    """Fetch Nobel laureate data from the Nobel Prize API."""
+    base_url = "https://api.nobelprize.org/2.1/laureates"
+    params = {
+        "nobelPrizeYear": start_year,
+        "yearTo": end_year,
+        "limit": limit
+    }
+    response = requests.get(base_url, params=params)
+    response.raise_for_status()
 
-# Set the parameters in a dictionary
-base_url = "https://api.nobelprize.org/2.1/laureates"
-parameters = {
-    "nobelPrizeYear": 2012,
-    "yearTo": 2022,
-    "limit": 1000
-}
+    os.makedirs("intermediate", exist_ok=True)
+    filename = f"intermediate/laureates_{start_year}_{end_year}.pkl"
+    with open(filename, "wb") as f:
+        pickle.dump(response, f)
 
-#-------------------------------------------------------------------------------
-# Execute API Call and Download results 
-#-------------------------------------------------------------------------------
+    return response.json().get("laureates", [])
 
-res = requests.get(base_url, params=parameters)
 
-# Save the response as a pickle file
-os.makedirs("intermediate", exist_ok=True)  # Create intermediate directory if not exists
-pkl_filename = os.path.join("intermediate", f"laureates_{parameters['nobelPrizeYear']}_{parameters['yearTo']}.pkl")
-with open(pkl_filename, "wb") as file:
-    pickle.dump(res, file)
-print(f"Data saved to {pkl_filename}")
+def normalize_nobel_data(laureates_data):
+    """Flatten and clean Nobel laureates data into a DataFrame."""
+    df = pd.json_normalize(
+        laureates_data,
+        record_path=["nobelPrizes"],
+        meta=[
+            "id",
+            "gender",
+            ["knownName", "en"],
+            ["orgName", "en"],
+            ["birth", "date"],
+            ["founded", "date"],
+            ["birth", "place", "country", "en"],
+            ["founded", "place", "country", "en"],
+            ["wikipedia", "english"]
+        ],
+        errors="ignore",
+        sep="."
+    )
 
-#-------------------------------------------------------------------------------
-# Flatten the Response into a DataFrame
-#-------------------------------------------------------------------------------
-response = res.json()
-laureates_data = response.get("laureates", [])
+    df["knownName"] = df["knownName.en"].combine_first(df["orgName.en"])
+    df["birthDate"] = df["birth.date"].combine_first(df["founded.date"])
+    df["birthCountry"] = df["birth.place.country.en"].combine_first(df["founded.place.country.en"])
 
-data = pd.json_normalize(
-    laureates_data,
-    record_path=["nobelPrizes"],
-    meta=[
-        "id",
-        "gender",
-        ["knownName", "en"],
-        ["orgName", "en"],
-        ["birth", "date"],
-        ["founded", "date"],
-        ["birth", "place", "country", "en"],
-        ["founded", "place", "country", "en"],
-        ["wikipedia", "english"]
-    ],
-    errors='ignore',
-    sep="."
-)
+    df.rename(columns={
+        "wikipedia.english": "wikipediaUrl",
+        "categoryFullName.en": "categoryFullName",
+        "motivation.en": "motivation"
+    }, inplace=True)
 
-# Combine individuals' and organizations' columns
-data["knownName"] = data["knownName.en"].combine_first(data["orgName.en"])
-data["birthDate"] = data["birth.date"].combine_first(data["founded.date"])
-data["birthCountry"] = data["birth.place.country.en"].combine_first(
-    data["founded.place.country.en"]
-)
+    keep_cols = [
+        "id", "knownName", "gender", "birthDate", "birthCountry", "wikipediaUrl",
+        "awardYear", "dateAwarded", "categoryFullName", "motivation"
+    ]
+    return df[[col for col in keep_cols if col in df.columns]]
 
-# Rename columns
-data.rename(columns={
-    "wikipedia.english": "wikipediaUrl",
-    "categoryFullName.en": "categoryFullName",
-    "motivation.en": "motivation"
-}, inplace=True)
 
-# Select relevant columns
-columns_to_keep = [
-    "id",
-    "knownName",
-    "gender",
-    "birthDate",
-    "birthCountry",
-    "wikipediaUrl",
-    "awardYear",
-    "dateAwarded",
-    "categoryFullName",
-    "motivation"
-]
+def save_data(df, filename="output/nobel_laureates_by_birth_country.csv"):
+    """Save DataFrame to a CSV file."""
+    os.makedirs(os.path.dirname(filename), exist_ok=True)
+    df.to_csv(filename, index=False)
+    print(f"Data saved to {filename}")
 
-columns_present = [col for col in columns_to_keep if col in data.columns]
-data = data[columns_present]
 
-#-------------------------------------------------------------------------------
-# Save the DataFrame to a CSV File
-#-------------------------------------------------------------------------------
-os.makedirs("output", exist_ok=True)
-csv_filename = os.path.join("output", f"nobel_laureates_by_birth_country.csv")
-data.to_csv(csv_filename, index=False)
-print(f"Data saved to {csv_filename}")
+def plot_laureate_trends(df, output_path="output/nobel_laureates_by_birth_country.png"):
+    """Generate and save a stacked bar chart of laureates by country and year."""
+    df["awardYear"] = pd.to_numeric(df["awardYear"], errors="coerce")
+    chart_data = df.pivot_table(index="awardYear", columns="birthCountry", aggfunc="size", fill_value=0)
 
-#-------------------------------------------------------------------------------
-# Exploratory Analysis
-#-------------------------------------------------------------------------------
+    plt.figure(figsize=(12, 8))
+    chart_data.plot(kind="bar", stacked=True, colormap="tab20", legend=True)
+    plt.title("Number of Nobel Laureates by Year and Birth Country")
+    plt.xlabel("Year")
+    plt.ylabel("Number of Laureates")
+    plt.legend(title="Birth Country", bbox_to_anchor=(1.05, 1), loc="upper left")
+    plt.tight_layout()
 
-# Prepare data for stacked bar chart
-data["awardYear"] = pd.to_numeric(data["awardYear"], errors="coerce")
-stacked_data = data.pivot_table(index="awardYear", columns="birthCountry", aggfunc="size", fill_value=0)
+    plt.savefig(output_path)
+    print(f"Chart saved to {output_path}")
+    plt.show()
 
-# Plot stacked bar chart
-fig, ax = plt.subplots(figsize=(12, 8))
-stacked_data.plot(kind="bar", stacked=True, ax=ax, colormap="tab20")
-plt.title("Number of Nobel Laureates by Year and Birth Country")
-plt.xlabel("Year")
-plt.ylabel("Number of Laureates")
-plt.legend(title="Birth Country", bbox_to_anchor=(1.05, 1), loc="upper left")
-plt.tight_layout()
 
-# Save the chart
-output_chart_path = os.path.join("output", "nobel_laureates_by_birth_country.png")
-plt.savefig(output_chart_path)
-print(f"Chart saved to {output_chart_path}")
-plt.show()
+def main():
+    laureates = fetch_nobel_data(2012, 2022)
+    df = normalize_nobel_data(laureates)
+    save_data(df)
+    plot_laureate_trends(df)
+
+
+if __name__ == "__main__":
+    main()
